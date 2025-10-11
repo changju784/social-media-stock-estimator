@@ -1,0 +1,85 @@
+# -----------------------------
+# Python / ML project ignores
+# -----------------------------
+
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+
+# Jupyter / VSCode
+.ipynb_checkpoints/
+.vscode/
+.idea/
+*.code-workspace
+
+# Build / distribution
+build/
+dist/
+*.egg-info/
+*.egg
+*.manifest
+*.spec
+
+# Logs / temp / system files
+*.log
+*.tmp
+*.bak
+.DS_Store
+Thumbs.db
+
+# Local environment and credentials
+.env
+*.env
+
+# Model artifacts / weights
+*.h5
+*.pth
+*.pt
+*.ckpt
+*.safetensors
+*.bin
+*.onnx
+
+# Data / crawled output
+reddit_crawler/data/raw/
+reddit_crawler/data/processed/
+data/
+datasets/
+*.csv
+*.json
+*.tsv
+*.parquet
+
+# Results / experiments
+outputs/
+results/
+runs/
+reports/
+checkpoints/
+notebooks/*.ipynb
+
+# -----------------------------
+# Node / frontend (if present)
+# -----------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+dist/
+build/
+.cache/
+.next/
+out/
+coverage/
+
+# -----------------------------
+# OS-specific
+# -----------------------------
+*.swp
+*.swo
