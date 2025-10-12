@@ -47,14 +47,14 @@ Thumbs.db
 *.onnx
 
 # Data / crawled output
-reddit_crawler/data/raw/
-reddit_crawler/data/processed/
-data/
-datasets/
-*.csv
-*.json
-*.tsv
-*.parquet
+# reddit_crawler/data/raw/
+# reddit_crawler/data/processed/
+# data/
+# datasets/
+# *.csv
+# *.json
+# *.tsv
+# *.parquet
 
 # Results / experiments
 outputs/

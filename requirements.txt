@@ -2,3 +2,6 @@ requests
 tqdm
 praw
 python-dotenv
+pandas
+nltk
+scikit-learn
