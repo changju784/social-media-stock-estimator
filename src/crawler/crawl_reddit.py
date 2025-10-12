@@ -15,11 +15,12 @@ def crawl_praw():
     for sub in SUBREDDITS:
         subreddit = reddit.subreddit(sub)
         for comp in COMPANIES:
-            print(f"\n🔍 Crawling {sub} for {comp}")
+            print(f"\nCrawling {sub} for {comp}")
             posts = []
             # Fetch top 100 posts from last month mentioning the company
             for post in subreddit.search(comp, sort="top", time_filter="month", limit=100):
                 post.comments.replace_more(limit=0)
+                # Fetch top 20 comments per post
                 comments = [c.body for c in post.comments[:20] if hasattr(c, "body")]
                 item = {
                     "id": post.id,
@@ -34,12 +35,13 @@ def crawl_praw():
                     "comments": comments
                 }
                 posts.append(item)
+                print(f"Fetched post {post.id} with {len(comments)} comments")
                 time.sleep(0.3)
             out = f"{SAVE_DIR}/{sub}_{comp}.json"
             os.makedirs(SAVE_DIR, exist_ok=True)
             with open(out, "w", encoding="utf-8") as f:
                 json.dump(posts, f, ensure_ascii=False, indent=2)
-            print(f"✅ Saved {len(posts)} posts to {out}")
+            print(f"Saved {len(posts)} posts to {out} for {comp} in {sub}")
 
 if __name__ == "__main__":
     crawl_praw()
