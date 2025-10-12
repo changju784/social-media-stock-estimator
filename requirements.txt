@@ -5,3 +5,5 @@ python-dotenv
 pandas
 nltk
 scikit-learn
+transformers
+torch
