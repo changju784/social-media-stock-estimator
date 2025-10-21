@@ -1,5 +1,4 @@
 # 🧠 Social Media Stock Estimator
-# 🧠 Social Media Stock Estimator
 
 ### Goal
 Estimate short-term stock sentiment and price movement signals from social media posts (Reddit & investing forums) for a small set of large-cap companies.
