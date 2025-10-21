@@ -48,17 +48,18 @@ COMPANIES  = ["Apple", "Amazon", "Google", "Meta", "Netflix"]
 SAVE_DIR   = "data/raw"
 ```
 
-Environment variables (store in a `.env` or your shell):
-
+### Environment variables (store in a `.env` or your shell):
+```
 REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET, REDDIT_USER_AGENT
+```
 
-Behavior (for each subreddit × company):
+### Behavior (for each subreddit × company):
 - Fetch up to 100 top posts from the past month
 - Include fields: `id, title, selftext, score, num_comments, created_utc, url, permalink, comments`
 - Save to: `data/raw/<subreddit>_<company>.json`
 - Rate-limited with `time.sleep(0.3)` between requests
 
-Example output (files):
+### Example output (files):
 
 ```
 data/raw/
@@ -67,7 +68,7 @@ data/raw/
  └── investing_Google.json
 ```
 
-Example JSON schema (one element):
+### Example JSON schema (one element):
 
 ```json
 {
@@ -89,9 +90,10 @@ Example JSON schema (one element):
 
 ## 🧹 2. Preprocessing Pipeline
 
-Goal: Convert raw Reddit JSONs → sentiment-labeled, finance-merged CSVs.
+### Goal
+Convert raw Reddit JSONs → sentiment-labeled, finance-merged CSVs.
 
-Steps:
+### Steps:
 
 1. Merge raw JSONs
 
@@ -141,9 +143,10 @@ python src/preprocessing/prepare_dataset.py
 
 ## 🧩 3. Modeling Pipeline
 
-Goal: Predict 7-day future stock price change (%) given text, sentiment, and metadata.
+### Goal
+Predict 7-day future stock price change (%) given text, sentiment, and metadata.
 
-Input features
+### Input features
 
 | Feature Type       | Columns                                         | Encoding / Shape                    |
 |--------------------|--------------------------------------------------|-------------------------------------|
@@ -152,13 +155,13 @@ Input features
 | Metadata           | `score, subreddit, ticker, created_utc`          | scaled + one-hot (+2 cyclical time) |
 | Target             | `price_pct_change`                               | continuous (% 7-day change)         |
 
-Model
+### Model
 
 PCA (128) → RidgeCV regression
 
 Regularized linear regression to avoid over-parameterization. RidgeCV automatically selects α (regularization strength).
 
-Scripts
+### Scripts
 
 | File               | Purpose                                                                      |
 |--------------------|------------------------------------------------------------------------------|
@@ -166,7 +169,7 @@ Scripts
 | `eval_model.py`    | Evaluates MAE / R² / correlation + scatter plot                             |
 | `predict_stock.py` | Aggregates recent posts for a ticker → predicts 7-day % change              |
 
-Outputs
+### Outputs
 
 ```
 models/
@@ -174,7 +177,7 @@ models/
  └── ridge_pipeline.pkl
 ```
 
-Training results (example)
+### Training results (example)
 
 ```
 Holdout  MAE: 0.0196 | R²: -0.093
@@ -182,7 +185,7 @@ Chosen alpha: 428.13
 Saved PCA + Ridge pipeline to models/
 ```
 
-Interpretation
+### Interpretation
 
 | Metric | Meaning                        | Comment                                              |
 |--------|--------------------------------|------------------------------------------------------|
@@ -200,7 +203,8 @@ Run:
 python src/modeling/eval_model.py
 ```
 
-Produces: console metrics (MAE, R², Correlation) and a scatter plot of predicted vs actual.
+### Produces:
+console metrics (MAE, R², Correlation) and a scatter plot of predicted vs actual.
 
 Interpretation: The model shows a mild directional correlation (positive diagonal) between sentiment signals and short-term price movement, though effect size is limited by dataset size.
 
