@@ -19,7 +19,7 @@ Reddit → Crawler → Preprocessing → FinBERT labeling → Price merge → Mu
 ---
 
 ## 📦 Architecture
-
+```
 SOCIAL-MEDIA-STOCK-ESTIMATOR/
 ├── data/
 │   ├── raw/           # Crawled JSON files (per subreddit × company)
@@ -31,7 +31,7 @@ SOCIAL-MEDIA-STOCK-ESTIMATOR/
 │   ├── preprocessing/ # Cleaning, tokenizing, labeling, price augmentation
 │   └── modeling/      # PCA + Ridge regression model, eval, predict scripts
 └── models/            # Saved PCA and Ridge pipeline artifacts
-
+```
 ---
 
 ## ⚙️ 1. Reddit Crawler
