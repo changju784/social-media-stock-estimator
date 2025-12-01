@@ -1,11 +1,9 @@
-"""
-Clean and normalize title + selftext + comments.
-"""
 import pandas as pd
 import re
+from src.config import INTERIM_DIR
 
-IN_PATH = "data/interim/merged_reddit.csv"
-OUT_PATH = "data/interim/cleaned_texts.csv"
+IN_PATH = f"{INTERIM_DIR}/merged_reddit.csv"
+OUT_PATH = f"{INTERIM_DIR}/cleaned_texts.csv"
 
 
 def clean(text):
@@ -18,17 +16,13 @@ def clean(text):
 
 def clean_dataset():
     df = pd.read_csv(IN_PATH)
-
     df["raw_text"] = (
-        df["title"].fillna("") + " "
-        + df["selftext"].fillna("") + " "
-        + df["comments"].fillna("")
+        df["title"].fillna("") + " " +
+        df["selftext"].fillna("") + " " +
+        df["comments"].fillna("")
     )
-
     df["clean_text"] = df["raw_text"].apply(clean)
     df = df[df["clean_text"].str.strip() != ""]
-
-    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
     df.to_csv(OUT_PATH, index=False)
 
     print(f"[clean_texts] cleaned {len(df)} → {OUT_PATH}")
