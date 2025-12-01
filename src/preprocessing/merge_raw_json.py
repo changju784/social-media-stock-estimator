@@ -1,46 +1,63 @@
-'''
-Merge all crawled raw JSON files into a single CSV file.
-'''
-import os, json
+"""
+Merge all crawled raw JSON files from:
+    data/raw/<company>/<subreddit>.json
+into a single unified CSV.
+"""
+
+import os
+import json
 import pandas as pd
 
-RAW_PATH = "data/raw"
+RAW_DIR = "data/raw"
 OUT_PATH = "data/interim/merged_reddit.csv"
+
 
 def merge_raw_files():
     records = []
-    for file in os.listdir(RAW_PATH):
-        if not file.endswith(".json"):
+
+    # Each folder under data/raw corresponds to a company name
+    for company in os.listdir(RAW_DIR):
+        company_dir = os.path.join(RAW_DIR, company)
+        if not os.path.isdir(company_dir):
             continue
-        # infer ticker from filename (e.g. investing_amazon.json, wallstreetbets_apple.json)
-        fname = file.lower()
-        ticker_map = {
-            "amazon": "AMZN",
-            "apple": "AAPL",
-            "google": "GOOG",
-            "meta": "META",
-            "netflix": "NFLX",
-        }
-        ticker = None
-        for key, val in ticker_map.items():
-            if key in fname:
-                ticker = val
-                break
-        with open(os.path.join(RAW_PATH, file), "r", encoding="utf-8") as f:
-            data = json.load(f)
-            for post in data:
+
+        ticker = company.upper()  # e.g., "amazon" -> "AMAZON" (you can switch to real tickers later)
+
+        for file in os.listdir(company_dir):
+            if not file.endswith(".json"):
+                continue
+
+            filepath = os.path.join(company_dir, file)
+            subreddit = file.replace(".json", "")
+
+            with open(filepath, "r", encoding="utf-8") as f:
+                posts = json.load(f)
+
+            for post in posts:
                 records.append({
                     "id": post.get("id"),
-                    "title": post.get("title"),
+                    "title": post.get("title", ""),
                     "selftext": post.get("selftext", ""),
+                    "comments": " ".join(post.get("comments", [])),
                     "score": post.get("score", 0),
-                    "created_utc": post.get("created_utc"),
-                    "subreddit": post.get("subreddit"),
+                    "subreddit": subreddit,
+                    "company_raw": company,
                     "ticker": ticker,
+                    "created_utc": post.get("created_utc"),
                 })
-    df = pd.DataFrame(records).drop_duplicates(subset=["id"])
+
+            print(f"Loaded {len(posts)} posts from {filepath}")
+
+    df = pd.DataFrame(records)
+
+    # remove duplicates by post id
+    df = df.drop_duplicates(subset=["id"], keep="first")
+
+    os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
     df.to_csv(OUT_PATH, index=False)
-    print(f"[merge_raw_json] merged {len(df)} posts → {OUT_PATH}")
+
+    print(f"\n[merge_raw_json] merged {len(df)} total posts → {OUT_PATH}")
+
 
 if __name__ == "__main__":
     merge_raw_files()

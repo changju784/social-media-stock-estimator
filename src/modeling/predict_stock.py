@@ -25,43 +25,51 @@ def get_finbert_embeddings(texts, model, tokenizer, max_len=128):
         embs.append(out.last_hidden_state[:, 0, :].squeeze().numpy())
     return np.array(embs)
 
-def encode_metadata(df):
+def encode_metadata(df, all_subs=None, all_tickers=None):
     meta = pd.DataFrame(index=df.index)
     meta["score_log1p"] = np.log1p(df["score"].clip(lower=0))
+
     sub = pd.get_dummies(df["subreddit"], prefix="sub")
     tic = pd.get_dummies(df["ticker"], prefix="tick")
+
+    # Recreate full training schema
+    if all_subs is not None:
+        for s in all_subs:
+            if s not in sub.columns:
+                sub[s] = 0
+        sub = sub[all_subs]
+    if all_tickers is not None:
+        for t in all_tickers:
+            if t not in tic.columns:
+                tic[t] = 0
+        tic = tic[all_tickers]
+
     dt = pd.to_datetime(df["created_utc"], unit="s", errors="coerce")
     dow = dt.dt.dayofweek.fillna(0).astype(int)
     meta["day_sin"] = np.sin(2 * np.pi * dow / 7)
     meta["day_cos"] = np.cos(2 * np.pi * dow / 7)
+
     return np.hstack([meta.values, sub.values, tic.values])
 
 # ---------------------------------------------------------
 # Prediction function
 # ---------------------------------------------------------
 def predict_from_posts(posts_df):
-    """
-    posts_df must contain:
-    ['clean_text','neg_prob','neu_prob','pos_prob','sentiment_score',
-     'score','subreddit','ticker','created_utc']
-    """
     pca = joblib.load(os.path.join(MODEL_DIR, "pca_finbert_128.pkl"))
     pipe = joblib.load(os.path.join(MODEL_DIR, "ridge_pipeline.pkl"))
+    meta_info = joblib.load(os.path.join(MODEL_DIR, "meta_columns.pkl"))
+    all_subs = meta_info["subreddit_cols"]
+    all_tickers = meta_info["ticker_cols"]
 
     tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
     finbert = AutoModel.from_pretrained("ProsusAI/finbert")
 
-    # FinBERT → PCA
     X_text = get_finbert_embeddings(posts_df["clean_text"].tolist(), finbert, tokenizer)
     X_text_pca = pca.transform(X_text)
-
-    # sentiment + metadata
     X_sent = posts_df[["neg_prob", "neu_prob", "pos_prob", "sentiment_score"]].values
-    X_meta = encode_metadata(posts_df)
+    X_meta = encode_metadata(posts_df, all_subs=all_subs, all_tickers=all_tickers)
 
     X = np.hstack([X_text_pca, X_sent, X_meta]).astype(np.float32)
-
-    # mean aggregation across posts for stability
     X_agg = X.mean(axis=0, keepdims=True)
     pred = pipe.predict(X_agg)[0]
     return float(pred)

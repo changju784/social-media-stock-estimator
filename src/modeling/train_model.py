@@ -62,7 +62,19 @@ def train():
 
     X_text = get_finbert_embeddings(df["clean_text"].tolist(), finbert, tokenizer)   # (N, 768)
     X_sent = df[["neg_prob", "neu_prob", "pos_prob", "sentiment_score"]].values      # (N, 4)
-    X_meta = encode_metadata(df)                                                     # (~N, ~10-12)
+    
+    # --- Encode metadata and save category columns for inference ---
+    X_meta = encode_metadata(df)
+
+    # Save column order to keep metadata encoding consistent at inference
+    subreddit_cols = pd.get_dummies(df["subreddit"], prefix="sub").columns.tolist()
+    ticker_cols    = pd.get_dummies(df["ticker"], prefix="tick").columns.tolist()
+
+    meta_info = {
+        "subreddit_cols": subreddit_cols,
+        "ticker_cols": ticker_cols,
+    }
+    joblib.dump(meta_info, os.path.join(MODEL_DIR, "meta_columns.pkl"))                                                     # (~N, ~10-12)
 
     # ----- PCA on embeddings to shrink capacity -----
     pca = PCA(n_components=128, random_state=42)

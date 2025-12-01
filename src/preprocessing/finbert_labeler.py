@@ -10,7 +10,7 @@ label_map = {"negative": -1, "neutral": 0, "positive": 1}
 
 def pseudo_label_finbert(in_path="data/interim/cleaned_texts.csv",
                          out_path="data/interim/labeled_texts.csv",
-                         batch_size=16,
+                         batch_size=32, 
                          max_length=256):
     print("[finbert_labeler] Loading FinBERT...")
     tok = AutoTokenizer.from_pretrained(MODEL)
