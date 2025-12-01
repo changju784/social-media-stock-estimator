@@ -11,7 +11,8 @@ This project builds a reproducible end-to-end pipeline to:
 4. **Train** a **multimodal regression model** (text + sentiment + metadata) to predict 7-day stock price change percentages.
 
 ### Useful links 
-Prototype: https://www.figma.com/make/wOTjTkWq3yzsGb9ionRoAk/Social-Media-Stock-Estimator?node-id=0-1&p=f&t=VXfweCGsWCQoityw-0&fullscreen=1
+[🔗 Prototype – Social Media Stock Estimator](https://www.figma.com/make/wOTjTkWq3yzsGb9ionRoAk/Social-Media-Stock-Estimator?node-id=0-1&p=f&t=VXfweCGsWCQoityw-0&fullscreen=1)
+
 ---
 
 ## 🏗️ System Overview
