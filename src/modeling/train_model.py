@@ -2,111 +2,189 @@ import os
 import numpy as np
 import pandas as pd
 import torch
-from sklearn.model_selection import KFold, cross_val_score, train_test_split
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
-from sklearn.linear_model import RidgeCV, ElasticNetCV
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import mean_absolute_error, r2_score
-from transformers import AutoTokenizer, AutoModel
-from tqdm import tqdm
 import joblib
+from tqdm import tqdm
 
-# ---------- paths ----------
-ROOT_DIR  = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
-DATA_PATH = os.path.join(ROOT_DIR, "data", "interim", "labeled_texts_with_prices.csv")
-MODEL_DIR = os.path.join(ROOT_DIR, "models"); os.makedirs(MODEL_DIR, exist_ok=True)
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.linear_model import ElasticNetCV
+from sklearn.decomposition import PCA
+from sklearn.metrics import mean_absolute_error, r2_score
 
-# ---------- helpers ----------
-def load_dataset():
-    df = pd.read_csv(DATA_PATH)
-    df = df.dropna(subset=["clean_text", "price_pct_change"]).copy()
-    # clip extreme outcomes to stabilize training
-    df["price_pct_change"] = df["price_pct_change"].clip(lower=-0.10, upper=0.10)
-    return df
+from transformers import AutoTokenizer, AutoModel
 
-def get_finbert_embeddings(texts, model, tokenizer, max_len=128):
-    embs = []
-    for t in tqdm(texts, desc="Encoding texts"):
-        tok = tokenizer(t, truncation=True, padding="max_length",
-                        max_length=max_len, return_tensors="pt")
-        with torch.no_grad():
-            out = model(**tok)
-        embs.append(out.last_hidden_state[:, 0, :].squeeze().numpy())
-    return np.array(embs)
 
-def encode_metadata(df):
-    meta = pd.DataFrame(index=df.index)
-    meta["score_log1p"] = np.log1p(df["score"].clip(lower=0))
+# ---------- Paths ----------
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
+PROC_DIR = os.path.join(ROOT_DIR, "data", "processed")
+MODEL_DIR = os.path.join(ROOT_DIR, "models")
+os.makedirs(MODEL_DIR, exist_ok=True)
 
-    # subreddit / ticker one-hots (lean)
-    sub = pd.get_dummies(df["subreddit"], prefix="sub")
-    tic = pd.get_dummies(df["ticker"],   prefix="tick")
+TRAIN_PATH = os.path.join(PROC_DIR, "reddit_train.csv")
+VAL_PATH   = os.path.join(PROC_DIR, "reddit_val.csv")
 
-    # simple cyclic time
-    dt = pd.to_datetime(df["created_utc"], unit="s", errors="coerce")
-    dow = dt.dt.dayofweek.fillna(0).astype(int)
-    meta["day_sin"] = np.sin(2*np.pi*dow/7)
-    meta["day_cos"] = np.cos(2*np.pi*dow/7)
+torch.set_grad_enabled(False)
 
-    return np.hstack([meta.values, sub.values, tic.values])
 
-def train():
-    # ----- data -----
-    df = load_dataset()
-    print(f"Loaded {len(df)} samples")
+# ---------------------------------------------------------
+# Load datasets
+# ---------------------------------------------------------
+def load_train_val():
+    train = pd.read_csv(TRAIN_PATH)
+    val   = pd.read_csv(VAL_PATH)
 
-    # FinBERT
-    tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
-    finbert   = AutoModel.from_pretrained("ProsusAI/finbert")
+    # Clip for stability
+    train["price_pct_change"] = train["price_pct_change"].clip(-0.10, 0.10)
+    val["price_pct_change"]   = val["price_pct_change"].clip(-0.10, 0.10)
 
-    X_text = get_finbert_embeddings(df["clean_text"].tolist(), finbert, tokenizer)   # (N, 768)
-    X_sent = df[["neg_prob", "neu_prob", "pos_prob", "sentiment_score"]].values      # (N, 4)
-    
-    # --- Encode metadata and save category columns for inference ---
-    X_meta = encode_metadata(df)
+    return train, val
 
-    # Save column order to keep metadata encoding consistent at inference
-    subreddit_cols = pd.get_dummies(df["subreddit"], prefix="sub").columns.tolist()
-    ticker_cols    = pd.get_dummies(df["ticker"], prefix="tick").columns.tolist()
 
-    meta_info = {
-        "subreddit_cols": subreddit_cols,
-        "ticker_cols": ticker_cols,
-    }
-    joblib.dump(meta_info, os.path.join(MODEL_DIR, "meta_columns.pkl"))                                                     # (~N, ~10-12)
 
-    # ----- PCA on embeddings to shrink capacity -----
+# ---------------------------------------------------------
+# FinBERT Embeddings
+# ---------------------------------------------------------
+def load_finbert():
+    model_name = "ProsusAI/finbert"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModel.from_pretrained(model_name)
+    return tokenizer, model
+
+
+def embed_texts(texts, tokenizer, model):
+    embeddings = []
+    for text in tqdm(texts, desc="Encoding FinBERT"):
+        tokens = tokenizer(text, padding=True, truncation=True,
+                           max_length=128, return_tensors="pt")
+        outputs = model(**tokens)
+        cls = outputs.last_hidden_state[:, 0, :].detach().numpy().squeeze()
+        embeddings.append(cls)
+    return np.array(embeddings)
+
+
+
+# ---------------------------------------------------------
+# Feature Engineering (ONLY using existing columns)
+# ---------------------------------------------------------
+def prepare_features(df, embeddings):
+    df["text_length"] = df["clean_text"].str.len()
+
+    # ------- Sentiment engineering -------
+    df["sentiment_strength"] = df[["neg_prob", "pos_prob"]].max(axis=1)
+    df["sentiment_conf"] = 1 - df["neu_prob"]
+    df["bull_bear_ratio"] = df["pos_prob"] / (df["neg_prob"] + 1e-6)
+
+    # ------- Interaction features -------
+    df["sentiment_x_price"] = df["sentiment_score"] * df["price_post"]
+    df["pos_x_price"] = df["pos_prob"] * df["price_post"]
+    df["neg_x_price"] = df["neg_prob"] * df["price_post"]
+
+    # ------- Base numeric features -------
+    feature_df = df[[
+        "neg_prob", "neu_prob", "pos_prob",
+        "sentiment_score", "text_length",
+        "sentiment_strength", "sentiment_conf", "bull_bear_ratio",
+        "sentiment_x_price", "pos_x_price", "neg_x_price",
+        "price_post", "price_7d", "price_diff"
+    ]].copy()
+
+    # ------- Embeddings -------
+    emb_df = pd.DataFrame(
+        embeddings, columns=[f"emb_{i}" for i in range(embeddings.shape[1])]
+    )
+
+    return pd.concat([feature_df, emb_df], axis=1)
+
+
+
+# ---------------------------------------------------------
+# Build Model Pipeline (PCA + ElasticNet)
+# ---------------------------------------------------------
+def build_pipeline(n_emb_dim):
+
+    base_features = [
+        "neg_prob", "neu_prob", "pos_prob",
+        "sentiment_score", "text_length",
+        "sentiment_strength", "sentiment_conf", "bull_bear_ratio",
+        "sentiment_x_price", "pos_x_price", "neg_x_price",
+        "price_post", "price_7d", "price_diff",
+    ]
+
+    emb_features = [f"emb_{i}" for i in range(n_emb_dim)]
+
+    numeric_cols = base_features + emb_features
+    categorical_cols = ["ticker"]
+
+    # PCA reduces dimensionality of embeddings
     pca = PCA(n_components=128, random_state=42)
-    X_text_pca = pca.fit_transform(X_text)  # (N, 128)
 
-    # concat final features
-    X = np.hstack([X_text_pca, X_sent, X_meta]).astype(np.float32)
-    y = df["price_pct_change"].values.astype(np.float32)
+    preprocessor = ColumnTransformer(
+        transformers=[
+            ("num", StandardScaler(), numeric_cols),
+            ("cat", OneHotEncoder(handle_unknown="ignore"), categorical_cols)
+        ]
+    )
 
-    # ----- pipeline: scale + ridge -----
-    ridge = RidgeCV(alphas=np.logspace(-4, 3, 20), cv=5)
-    pipe = Pipeline([
-        ("scaler", StandardScaler(with_mean=True, with_std=True)),
-        ("reg",    ridge),
+    model = ElasticNetCV(
+        l1_ratio=[0.1, 0.5, 0.9],
+        alphas=np.logspace(-3, 3, 20),
+        max_iter=5000,
+        cv=5,
+        n_jobs=-1
+    )
+
+    return Pipeline([
+        ("pre", preprocessor),
+        ("pca", pca),
+        ("model", model),
     ])
 
-    # CV score (MAE negative in sklearn → invert sign)
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    mae_cv = -cross_val_score(pipe, X, y, scoring="neg_mean_absolute_error", cv=kf).mean()
-    print(f"CV MAE: {mae_cv:.4f}")
 
-    # holdout for quick sanity
-    X_tr, X_te, y_tr, y_te = train_test_split(X, y, test_size=0.2, random_state=42)
-    pipe.fit(X_tr, y_tr)
-    y_pr = pipe.predict(X_te)
-    print(f"Holdout  MAE: {mean_absolute_error(y_te, y_pr):.4f} | R²: {r2_score(y_te, y_pr):.3f}")
-    print(f"Chosen alpha: {pipe.named_steps['reg'].alpha_:.6f}")
 
-    # save artifacts
-    joblib.dump(pca,  os.path.join(MODEL_DIR, "pca_finbert_128.pkl"))
-    joblib.dump(pipe, os.path.join(MODEL_DIR, "ridge_pipeline.pkl"))
-    print("✅ Saved PCA + Ridge pipeline to models/")
+# ---------------------------------------------------------
+# Training
+# ---------------------------------------------------------
+def train_model():
+    train, val = load_train_val()
+    tokenizer, model = load_finbert()
+
+    print("🔹 Encoding training texts")
+    train_emb = embed_texts(train["clean_text"].tolist(), tokenizer, model)
+
+    print("🔹 Encoding val texts")
+    val_emb = embed_texts(val["clean_text"].tolist(), tokenizer, model)
+
+    print("🔹 Building features")
+    X_train = prepare_features(train, train_emb)
+    X_val   = prepare_features(val, val_emb)
+
+    y_train = train["price_pct_change"]
+    y_val   = val["price_pct_change"]
+
+    full_train = pd.concat([train[["ticker"]], X_train], axis=1)
+    full_val   = pd.concat([val[["ticker"]], X_val], axis=1)
+
+    print("🔹 Building PCA + ElasticNet pipeline")
+    pipeline = build_pipeline(train_emb.shape[1])
+
+    print("🔹 Training model...")
+    pipeline.fit(full_train, y_train)
+
+    preds = pipeline.predict(full_val)
+
+    mae = mean_absolute_error(y_val, preds)
+    r2  = r2_score(y_val, preds)
+    corr = np.corrcoef(y_val, preds)[0, 1]
+
+    print("\n📈 Validation Results (ElasticNet + PCA)")
+    print(f"MAE : {mae:.4f}")
+    print(f"R²  : {r2:.4f}")
+    print(f"Corr: {corr:.4f}")
+
+    joblib.dump(pipeline, os.path.join(MODEL_DIR, "elasticnet_pca_pipeline.pkl"))
+    print("\n✅ Saved ElasticNet PCA pipeline")
+
 
 if __name__ == "__main__":
-    train()
+    train_model()

@@ -119,6 +119,10 @@ python src\preprocessing\finbert_labeler.py
 python src\preprocessing\augment_with_yfinance.py
 python src\modeling\train_model.py
 python src\modeling\eval_model.py
+
+OR 
+
+make all
 ```
 
 ---
@@ -435,59 +439,68 @@ Confidence: Moderate (based on post count and sentiment consistency)
 
 ---
 
-## 📈 Model Architecture & Features
+## 🤖 Modeling (v3)
 
-### Input Features
+## Inputs Used (ONLY columns present in dataset)
+- clean_text  
+- ticker  
+- neg_prob, neu_prob, pos_prob  
+- sentiment_score  
+- price_post, price_7d, price_diff  
 
-| Feature Type       | Columns                                         | Encoding / Shape                    |
-|--------------------|--------------------------------------------------|-------------------------------------|
-| Text embedding     | `clean_text`                                     | FinBERT → 768 → PCA (128)           |
-| Sentiment features | `neg_prob, neu_prob, pos_prob, sentiment_score`  | 4 scalars                           |
-| Metadata           | `score, subreddit, ticker, created_utc`          | scaled + one-hot (+2 cyclical time) |
-| **Target**         | `price_pct_change`                               | continuous (% 7-day change)         |
+## Engineered Features (computed internally)
+- text_length  
+- sentiment_strength  
+- sentiment_conf  
+- bull_bear_ratio  
+- sentiment_x_price  
+- pos_x_price  
+- neg_x_price  
 
-### Model
-
-**PCA (128) → RidgeCV Regression**
-
-- Regularized linear regression to avoid over-parameterization
-- RidgeCV automatically selects optimal α (regularization strength) via cross-validation
-- Chosen α ≈ 428 indicates a strong penalty, resulting in a smooth, low-variance model
-
-### Scripts Summary
-
-| File               | Purpose                                                         | Input                              | Output                               |
-|--------------------|---------------------------------------------------------------|------------------------------------|------------------------------------|
-| `train_model.py`   | Trains PCA + Ridge model                                      | `reddit_train.csv`                 | `pca_*.pkl`, `ridge_*.pkl`          |
-| `eval_model.py`    | Evaluates on test set, produces metrics & scatter plot        | `reddit_test.csv` + models         | console metrics, scatter plot       |
-| `predict_stock.py` | Predicts 7-day % change for a ticker                          | models + `labeled_texts_with_prices.csv` | per-ticker 7-day forecast |
+## Modeling Pipeline
+- FinBERT CLS embedding (768D)  
+- PCA → 128D  
+- One-hot encode ticker  
+- Combine engineered + PCA features  
+- ElasticNetCV (l1 ratios = 0.1, 0.5, 0.9; alpha = 1e-3 … 1e3)
 
 ---
 
-## 🧪 Current Performance Metrics (v2 Data)
+# 📈 Performance Comparison (All Versions)
 
-| Metric              | Value   | Interpretation                                                      |
-|---------------------|---------|---------------------------------------------------------------------|
-| Dataset Size        | 5,206   | Total posts collected; ~3,644 train, ~781 val, ~781 test            |
-| Total Comments      | 80,141  | Average 15.4 comments per post                                      |
-| Companies           | 18      | 7 mega-cap tech + 11 diversified sectors                            |
-| Subreddits          | 4       | /r/stocks, /r/StockMarket, /r/investing, /r/wallstreetbets          |
-| Model α (Ridge)     | 428.13  | Strong regularization → smooth, generalized predictions             |
-| Expected MAE        | ~0.015  | ±1.5% average prediction error (improved from v1)                   |
-| Expected R²         | ~0.05   | Modest correlation; larger dataset should improve performance       |
+| Model Version | MAE ↓ | R² ↑ | Corr ↑ | Notes |
+|---------------|-------|-------|--------|-------|
+| ⭐ **v3 — ElasticNet + PCA(128) + engineered** | **0.0237** | **0.6206** | **0.7898** | 🔥 Best performance achieved |
+| Phase-1 RidgeCV (small dataset) | 0.0205 | 0.3300 | 0.6900 | Good baseline but tiny dataset |
+| v2 RidgeCV | 0.0413 | 0.0159 | 0.1395 | Underfit, no engineered features |
+| v2 LightGBM | 0.0412 | 0.0072 | 0.1429 | Weak — noisy high-dim embeddings |
+| Baseline (predict mean) | ~0.045 | 0.0000 | 0.0000 | No predictive value |
 
 ---
 
-## 🚀 Future Improvements
+# 🧠 Why v3 Performs Best
+- PCA reduces embedding noise (768 → 128)  
+- ElasticNet balances sparsity + stability  
+- Sentiment × price interactions add signal  
+- FinBERT sentiment features improved with confidence/strength ratios  
 
-| Area         | Idea                                                            |
-|------------------|------------------------------------------------------------|
-| Data size        | Expand to ≥5k posts per ticker (increase to 6–12 months of history) |
-| Aggregation      | Predict per-ticker **per-day** instead of per-post            |
-| Modeling         | Test XGBoost, LightGBM, Neural Networks                        |
-| Feature tuning   | Try PCA 64–256, add VADER sentiment, expand metadata          |
-| Temporal         | Account for market regime (bull/bear), earnings calendar      |
-| Deployment       | Serve predictions via FastAPI (`GET /predict?ticker=AAPL`)    |
+---
+
+# 📈 Best Model Output (v3)
+
+MAE: **0.0237**  
+R²: **0.6206**  
+Correlation: **0.7898**  
+
+This is the strongest model across all versions and demonstrates meaningful predictive structure between sentiment and short-term price movement.
+
+---
+
+# 🚀 Future Improvements
+- Aggregate posts per day  
+- Add price-history features (returns, volatility)  
+- Compare non-linear models (XGBoost, MLP)  
+- Build a FastAPI endpoint for live predictions  
 
 ---
 
@@ -512,23 +525,6 @@ This repository demonstrates a **full end-to-end research pipeline** for financi
 - Text semantics alone are noisy; combining sentiment + subreddit + time features improves signal
 - Over-parameterization resolved by PCA (128) + RidgeCV (α ≈ 428)
 - Strong baseline for scaling: larger dataset should significantly improve predictive power
-
----
-
-## 💬 Discussion
-
-**Why is R² negative?**
-A negative R² means the model performs worse than a simple horizontal baseline (predicting the mean). This is expected with:
-- Small dataset (351 posts)
-- Weak signal: Reddit sentiment ≠ strong price predictor alone
-- High market noise: many factors drive short-term price changes
-
-**Next steps to improve:**
-1. Expand dataset to 5k+ posts per ticker
-2. Add market regime features (bull/bear market, VIX, sector performance)
-3. Aggregate predictions to **per-day level** instead of per-post
-4. Evaluate on longer time horizons (14-day, 30-day instead of 7-day)
-5. Test non-linear models (XGBoost, Neural Networks)
 
 ---
 

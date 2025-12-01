@@ -4,84 +4,74 @@ import pandas as pd
 import torch
 import joblib
 from transformers import AutoTokenizer, AutoModel
-from tqdm import tqdm
 
-# ---------------------------------------------------------
-# Universal paths
-# ---------------------------------------------------------
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
-MODEL_DIR = os.path.join(ROOT_DIR, "models")
+MODEL_PATH = os.path.join(ROOT_DIR, "models", "elasticnet_pca_pipeline.pkl")
 
-# ---------------------------------------------------------
-# Helper functions (identical to training)
-# ---------------------------------------------------------
+
+# --------------------------
+# FinBERT
+# --------------------------
 def get_finbert_embeddings(texts, model, tokenizer, max_len=128):
     embs = []
     for t in texts:
-        toks = tokenizer(t, truncation=True, padding="max_length",
-                         max_length=max_len, return_tensors="pt")
+        tok = tokenizer(t, padding="max_length", truncation=True,
+                        max_length=max_len, return_tensors="pt")
         with torch.no_grad():
-            out = model(**toks)
+            out = model(**tok)
         embs.append(out.last_hidden_state[:, 0, :].squeeze().numpy())
     return np.array(embs)
 
-def encode_metadata(df, all_subs=None, all_tickers=None):
-    meta = pd.DataFrame(index=df.index)
-    meta["score_log1p"] = np.log1p(df["score"].clip(lower=0))
 
-    sub = pd.get_dummies(df["subreddit"], prefix="sub")
-    tic = pd.get_dummies(df["ticker"], prefix="tick")
+# --------------------------
+# Feature Engineering (same as training)
+# --------------------------
+def prepare_features(df, embeddings):
+    df = df.copy()
+    df["text_length"] = df["clean_text"].str.len()
 
-    # Recreate full training schema
-    if all_subs is not None:
-        for s in all_subs:
-            if s not in sub.columns:
-                sub[s] = 0
-        sub = sub[all_subs]
-    if all_tickers is not None:
-        for t in all_tickers:
-            if t not in tic.columns:
-                tic[t] = 0
-        tic = tic[all_tickers]
+    df["sentiment_strength"] = df[["neg_prob", "pos_prob"]].max(axis=1)
+    df["sentiment_conf"] = 1 - df["neu_prob"]
+    df["bull_bear_ratio"] = df["pos_prob"] / (df["neg_prob"] + 1e-6)
 
-    dt = pd.to_datetime(df["created_utc"], unit="s", errors="coerce")
-    dow = dt.dt.dayofweek.fillna(0).astype(int)
-    meta["day_sin"] = np.sin(2 * np.pi * dow / 7)
-    meta["day_cos"] = np.cos(2 * np.pi * dow / 7)
+    df["sentiment_x_price"] = df["sentiment_score"] * df["price_post"]
+    df["pos_x_price"] = df["pos_prob"] * df["price_post"]
+    df["neg_x_price"] = df["neg_prob"] * df["price_post"]
 
-    return np.hstack([meta.values, sub.values, tic.values])
+    base = df[[
+        "neg_prob", "neu_prob", "pos_prob",
+        "sentiment_score", "text_length",
+        "sentiment_strength", "sentiment_conf", "bull_bear_ratio",
+        "sentiment_x_price", "pos_x_price", "neg_x_price",
+        "price_post", "price_7d", "price_diff"
+    ]].copy()
 
-# ---------------------------------------------------------
-# Prediction function
-# ---------------------------------------------------------
+    emb_df = pd.DataFrame(
+        embeddings,
+        columns=[f"emb_{i}" for i in range(embeddings.shape[1])]
+    )
+
+    return pd.concat([base, emb_df], axis=1)
+
+
+# --------------------------
+# Predict function
+# --------------------------
 def predict_from_posts(posts_df):
-    pca = joblib.load(os.path.join(MODEL_DIR, "pca_finbert_128.pkl"))
-    pipe = joblib.load(os.path.join(MODEL_DIR, "ridge_pipeline.pkl"))
-    meta_info = joblib.load(os.path.join(MODEL_DIR, "meta_columns.pkl"))
-    all_subs = meta_info["subreddit_cols"]
-    all_tickers = meta_info["ticker_cols"]
+    pipeline = joblib.load(MODEL_PATH)
 
     tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
     finbert = AutoModel.from_pretrained("ProsusAI/finbert")
 
-    X_text = get_finbert_embeddings(posts_df["clean_text"].tolist(), finbert, tokenizer)
-    X_text_pca = pca.transform(X_text)
-    X_sent = posts_df[["neg_prob", "neu_prob", "pos_prob", "sentiment_score"]].values
-    X_meta = encode_metadata(posts_df, all_subs=all_subs, all_tickers=all_tickers)
+    embeddings = get_finbert_embeddings(posts_df["clean_text"].tolist(), finbert, tokenizer)
+    X = prepare_features(posts_df, embeddings)
 
-    X = np.hstack([X_text_pca, X_sent, X_meta]).astype(np.float32)
+    # Aggregate all posts for ticker → mean features
     X_agg = X.mean(axis=0, keepdims=True)
-    pred = pipe.predict(X_agg)[0]
+
+    pred = pipeline.predict(X_agg)[0]
     return float(pred)
 
-# ---------------------------------------------------------
-# Example CLI usage
-# ---------------------------------------------------------
-if __name__ == "__main__":
-    ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
-    df = pd.read_csv(os.path.join(ROOT_DIR, "data", "interim", "labeled_texts_with_prices.csv"))
 
-    # simulate “recent posts for AAPL”
-    aapl_df = df[df["ticker"] == "AAPL"].tail(10)
-    prediction = predict_from_posts(aapl_df)
-    print(f"Predicted 7-day price change for AAPL: {prediction:+.3f}%")
+if __name__ == "__main__":
+    print("Run this via another script (predict_from_posts)")

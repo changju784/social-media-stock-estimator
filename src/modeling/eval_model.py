@@ -1,83 +1,121 @@
 import os
 import numpy as np
 import pandas as pd
-import torch
 import joblib
+import torch
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModel
-from sklearn.metrics import mean_absolute_error, r2_score
 import matplotlib.pyplot as plt
+from sklearn.metrics import mean_absolute_error, r2_score
+from transformers import AutoTokenizer, AutoModel
 
-# ---------------------------------------------------------
-# Universal paths
-# ---------------------------------------------------------
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../"))
-DATA_PATH = os.path.join(ROOT_DIR, "data", "interim", "labeled_texts_with_prices.csv")
-MODEL_DIR = os.path.join(ROOT_DIR, "models")
+DATA_PATH = os.path.join(ROOT_DIR, "data", "processed", "reddit_test.csv")
+MODEL_PATH = os.path.join(ROOT_DIR, "models", "elasticnet_pca_pipeline.pkl")
 
-# ---------------------------------------------------------
-# Helper functions (match train_model.py)
-# ---------------------------------------------------------
+
+# -------------------------------
+# FinBERT embedding
+# -------------------------------
 def get_finbert_embeddings(texts, model, tokenizer, max_len=128):
     embs = []
-    for t in tqdm(texts, desc="Encoding texts"):
-        toks = tokenizer(t, truncation=True, padding="max_length",
-                         max_length=max_len, return_tensors="pt")
+    for t in tqdm(texts, desc="Encoding FinBERT"):
+        tok = tokenizer(t, padding="max_length", truncation=True,
+                        max_length=max_len, return_tensors="pt")
         with torch.no_grad():
-            out = model(**toks)
+            out = model(**tok)
         embs.append(out.last_hidden_state[:, 0, :].squeeze().numpy())
     return np.array(embs)
 
-def encode_metadata(df):
-    meta = pd.DataFrame(index=df.index)
-    meta["score_log1p"] = np.log1p(df["score"].clip(lower=0))
-    sub = pd.get_dummies(df["subreddit"], prefix="sub")
-    tic = pd.get_dummies(df["ticker"], prefix="tick")
-    dt = pd.to_datetime(df["created_utc"], unit="s", errors="coerce")
-    dow = dt.dt.dayofweek.fillna(0).astype(int)
-    meta["day_sin"] = np.sin(2 * np.pi * dow / 7)
-    meta["day_cos"] = np.cos(2 * np.pi * dow / 7)
-    return np.hstack([meta.values, sub.values, tic.values])
 
-# ---------------------------------------------------------
+# -------------------------------
+# Feature Engineering (same as training)
+# -------------------------------
+def prepare_features(df, embeddings):
+    df = df.copy()
+    df["text_length"] = df["clean_text"].str.len()
+
+    df["sentiment_strength"] = df[["neg_prob", "pos_prob"]].max(axis=1)
+    df["sentiment_conf"] = 1 - df["neu_prob"]
+    df["bull_bear_ratio"] = df["pos_prob"] / (df["neg_prob"] + 1e-6)
+
+    df["sentiment_x_price"] = df["sentiment_score"] * df["price_post"]
+    df["pos_x_price"] = df["pos_prob"] * df["price_post"]
+    df["neg_x_price"] = df["neg_prob"] * df["price_post"]
+
+    base = df[[
+        "neg_prob", "neu_prob", "pos_prob",
+        "sentiment_score", "text_length",
+        "sentiment_strength", "sentiment_conf", "bull_bear_ratio",
+        "sentiment_x_price", "pos_x_price", "neg_x_price",
+        "price_post", "price_7d", "price_diff"
+    ]].copy()
+
+    emb_df = pd.DataFrame(
+        embeddings,
+        columns=[f"emb_{i}" for i in range(embeddings.shape[1])]
+    )
+
+    return pd.concat([base, emb_df], axis=1)
+
+
+# -------------------------------
 # Evaluation
-# ---------------------------------------------------------
-def evaluate_model():
-    # 1. Load dataset
+# -------------------------------
+def evaluate():
+    print("🔍 Loading dataset...")
     df = pd.read_csv(DATA_PATH)
-    df = df.dropna(subset=["clean_text", "price_pct_change"]).copy()
-    df["price_pct_change"] = df["price_pct_change"].clip(lower=-0.10, upper=0.10)
-    y_true = df["price_pct_change"].values
+    df = df.dropna(subset=["clean_text", "price_pct_change"])
 
-    # 2. Load models
-    pca = joblib.load(os.path.join(MODEL_DIR, "pca_finbert_128.pkl"))
-    pipe = joblib.load(os.path.join(MODEL_DIR, "ridge_pipeline.pkl"))
+    y_true = df["price_pct_change"].clip(-0.10, 0.10).values
 
-    # 3. Build feature set
+    print("🔍 Loading model...")
+    pipeline = joblib.load(MODEL_PATH)
+
+    print("🔍 Loading FinBERT...")
     tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
     finbert = AutoModel.from_pretrained("ProsusAI/finbert")
-    X_text = get_finbert_embeddings(df["clean_text"].tolist(), finbert, tokenizer)
-    X_text_pca = pca.transform(X_text)
-    X_sent = df[["neg_prob", "neu_prob", "pos_prob", "sentiment_score"]].values
-    X_meta = encode_metadata(df)
-    X = np.hstack([X_text_pca, X_sent, X_meta]).astype(np.float32)
 
-    # 4. Predict
-    y_pred = pipe.predict(X)
+    print("🔍 Encoding text...")
+    embeddings = get_finbert_embeddings(df["clean_text"].tolist(), finbert, tokenizer)
 
-    # 5. Metrics
+    print("🔍 Building features...")
+    X = prepare_features(df, embeddings)
+
+    print("🔍 Predicting...")
+    y_pred = pipeline.predict(X)
+
+    # Metrics
     mae = mean_absolute_error(y_true, y_pred)
     r2 = r2_score(y_true, y_pred)
     corr = np.corrcoef(y_true, y_pred)[0, 1]
-    print(f"MAE: {mae:.4f} | R²: {r2:.3f} | Corr: {corr:.3f}")
+    direction = (np.sign(y_true) == np.sign(y_pred)).mean()
 
-    # 6. Plot
-    plt.scatter(y_true, y_pred, alpha=0.6)
-    plt.xlabel("Actual % Change")
-    plt.ylabel("Predicted % Change")
-    plt.title("Predicted vs Actual Stock Price Change (7d)")
+    print("\n📈 Evaluation Results")
+    print(f"MAE: {mae:.4f}")
+    print(f"R²: {r2:.4f}")
+    print(f"Corr: {corr:.4f}")
+    print(f"Directional Accuracy: {direction:.2%}")
+
+    # Scatter Plot
+    plt.figure(figsize=(6, 6))
+    plt.scatter(y_true, y_pred, alpha=0.5)
+    plt.xlabel("Actual")
+    plt.ylabel("Predicted")
+    plt.title("Predicted vs Actual")
     plt.grid(True)
     plt.show()
 
+    # Residual Plot
+    residuals = y_true - y_pred
+    plt.figure(figsize=(6, 5))
+    plt.scatter(y_pred, residuals, alpha=0.5)
+    plt.axhline(0, color="red")
+    plt.xlabel("Predicted")
+    plt.ylabel("Residual")
+    plt.title("Residual Plot")
+    plt.grid(True)
+    plt.show()
+
+
 if __name__ == "__main__":
-    evaluate_model()
+    evaluate()
