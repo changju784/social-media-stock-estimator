@@ -501,11 +501,11 @@ This is the strongest model across all versions and demonstrates meaningful pred
 
 The model demonstrates a strong linear relationship between predicted and actual 7-day returns, with meaningful dispersion around the diagonal and no major structural bias. Predictions cluster around zero, as is typical for sentiment-driven price forecasting, but the model successfully identifies positive return trends and relative magnitudes.
 
-
 ## Residual Plots
 ![alt text](image-1.png)
 
 The residuals are well distributed around zero with no strong pattern, indicating the model is not systematically biased. Errors naturally increase for larger-magnitude predictions, which is expected in short-term financial forecasting. Overall, the residual behavior confirms strong model calibration and stable variance.
+
 ---
 
 
