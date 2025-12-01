@@ -78,11 +78,15 @@ def evaluate():
     print("🔍 Encoding text...")
     embeddings = get_finbert_embeddings(df["clean_text"].tolist(), finbert, tokenizer)
 
-    print("🔍 Building features...")
+    print("🔍 Preparing features...")
     X = prepare_features(df, embeddings)
 
-    print("🔍 Predicting...")
+    # Add ticker column back for the pipeline
+    X.insert(0, "ticker", df["ticker"].astype(str).values)
+
+    print("🔍 Making predictions...")
     y_pred = pipeline.predict(X)
+
 
     # Metrics
     mae = mean_absolute_error(y_true, y_pred)
